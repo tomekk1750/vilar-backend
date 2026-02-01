@@ -1,0 +1,18 @@
+# build
+bin/
+obj/
+.vs/
+
+# user files
+*.user
+*.suo
+*.cache
+*.log
+
+# secrets / env
+.env
+appsettings.Development.json
+appsettings.*.Development.json
+
+# publish
+publish/
