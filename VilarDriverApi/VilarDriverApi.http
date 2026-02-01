@@ -1,0 +1,6 @@
+@VilarDriverApi_HostAddress = http://localhost:5237
+
+GET {{VilarDriverApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

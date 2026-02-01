@@ -1,0 +1,11 @@
+Bearer: {eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwicm9sZSI6IkRyaXZlciIsImRyaXZlcklkIjoiMSIsImV4cCI6MTc2ODQyMjQ4NSwiaXNzIjoiVklMQVIiLCJhdWQiOiJWSUxBUiJ9.58HtJOOeHIr6cDf_FbFSBt8GAgWkezzui8ODWmmFxNU}
+
+
+PS D:\VILAR DriverApp\VILAR-Backend\VilarDriverApi> dotnet run
+http://localhost:5237/swagger/index.html
+
+PS D:\VILAR DriverApp\vilar-admin> npm run dev
+http://localhost:5173/
+
+
+/// eslint-disable-next-line react-hooks/exhaustive-deps
