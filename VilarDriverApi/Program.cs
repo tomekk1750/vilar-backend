@@ -7,21 +7,42 @@ using Microsoft.OpenApi.Models;
 using VilarDriverApi.Data;
 using VilarDriverApi.Services;
 using System.Globalization;
+using Microsoft.Data.SqlClient;
 
 var builder = WebApplication.CreateBuilder(args);
 
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
+// =====================
 // DB
-builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+// =====================
+var connectionString = builder.Configuration.GetConnectionString("Default");
 
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    Console.WriteLine("❌ Connection string 'Default' is NULL or EMPTY");
+}
+else
+{
+    var csb = new SqlConnectionStringBuilder(connectionString);
+    Console.WriteLine(
+        $"✅ SQL CONFIG | Server={csb.DataSource} | Database={csb.InitialCatalog} | UserID={csb.UserID} | Encrypt={csb.Encrypt}"
+    );
+}
+
+builder.Services.AddDbContext<AppDbContext>(opt =>
+    opt.UseSqlServer(connectionString));
+
+// =====================
 // Services
+// =====================
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<EpodService>();
 
+// =====================
 // Controllers
+// =====================
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
@@ -39,11 +60,12 @@ builder.Services.AddCors(options =>
             )
             .AllowAnyHeader()
             .AllowAnyMethod();
-        // ✅ Bez AllowCredentials, bo i tak używasz JWT w Authorization header
     });
 });
 
+// =====================
 // JWT
+// =====================
 var jwt = builder.Configuration.GetSection("Jwt");
 var keyBytes = Encoding.UTF8.GetBytes(jwt["Key"]!);
 
@@ -73,7 +95,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// =====================
 // Swagger + JWT
+// =====================
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
@@ -108,18 +132,26 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+// =====================
 // Storage folder
+// =====================
 var storage = builder.Configuration["Storage:BasePath"] ?? "Storage";
 Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, storage));
 
+// =====================
 // BUILD
+// =====================
 var app = builder.Build();
 
+// =====================
 // Swagger
+// =====================
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// =====================
 // Static files /files/...
+// =====================
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
@@ -127,19 +159,43 @@ app.UseStaticFiles(new StaticFileOptions
     RequestPath = "/files"
 });
 
-// Middleware: CORS -> Auth -> Authorization
+// =====================
+// Middleware
+// =====================
 app.UseCors("DevCors");
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
 
-// Seed DB
-using (var scope = app.Services.CreateScope())
+// =====================
+// DB MIGRATION + SEED
+// =====================
+if (app.Environment.IsProduction())
 {
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
-    DbSeeder.Seed(db);
+    Console.WriteLine("ℹ️ Production environment detected – skipping Database.Migrate() and DbSeeder");
+}
+else
+{
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        Console.WriteLine("ℹ️ Running Database.Migrate()");
+        db.Database.Migrate();
+
+        Console.WriteLine("ℹ️ Running DbSeeder");
+        DbSeeder.Seed(db);
+
+        Console.WriteLine("✅ Database initialized successfully");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("❌ Database initialization FAILED");
+        Console.WriteLine(ex.ToString());
+        throw;
+    }
 }
 
 app.Run();
