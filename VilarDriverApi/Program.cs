@@ -35,7 +35,15 @@ else
 }
 
 builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlServer(connectionString));
+    opt.UseSqlServer(connectionString, sql =>
+    {
+        // ✅ ważne przy Azure SQL serverless / transient faults
+        sql.EnableRetryOnFailure(
+            maxRetryCount: 10,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorNumbersToAdd: null
+        );
+    }));
 
 // =====================
 // Services
@@ -187,8 +195,32 @@ if (!app.Environment.IsProduction() || runMigrations)
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        Console.WriteLine("ℹ️ Running Database.Migrate()");
-        db.Database.Migrate();
+        Console.WriteLine("ℹ️ Running Database.Migrate() with retry (serverless warm-up)");
+
+        var attempts = 0;
+        var maxAttempts = 12; // ~2 min przy 10s delay
+
+        while (true)
+        {
+            try
+            {
+                attempts++;
+                db.Database.Migrate();
+                break;
+            }
+            catch (SqlException ex) when (
+                ex.Number == 40613 || // Database not available
+                ex.Number == 40197 || // Service encountered an error
+                ex.Number == 40501 || // Service is busy
+                ex.Number == 49918 || ex.Number == 49919 || ex.Number == 49920 // throttling / busy
+            )
+            {
+                if (attempts >= maxAttempts) throw;
+
+                Console.WriteLine($"⚠️ SQL transient error {ex.Number}. Retry {attempts}/{maxAttempts} in 10s...");
+                await Task.Delay(TimeSpan.FromSeconds(10));
+            }
+        }
 
         Console.WriteLine("ℹ️ Running DbSeeder");
         DbSeeder.Seed(db);
@@ -201,7 +233,7 @@ if (!app.Environment.IsProduction() || runMigrations)
         Console.WriteLine(ex.ToString());
 
         // Jeśli świadomie odpaliliśmy migracje (RUN_DB_MIGRATIONS=true),
-        // to FAIL jest poprawnym sygnałem dla pipeline
+        // to FAIL jest poprawnym sygnałem dla workflow
         if (runMigrations)
             throw;
     }
