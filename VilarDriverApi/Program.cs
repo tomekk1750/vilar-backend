@@ -7,6 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using VilarDriverApi.Data;
 using VilarDriverApi.Services;
+using Microsoft.Data.SqlClient;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,36 +18,49 @@ CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
 // =====================
-// Configuration check
+// Basic startup logs
 // =====================
-var connectionString = builder.Configuration.GetConnectionString("Default");
-
 Console.WriteLine("=======================================");
 Console.WriteLine("🚀 APPLICATION STARTING");
 Console.WriteLine($"🌍 ENVIRONMENT: {builder.Environment.EnvironmentName}");
-Console.WriteLine($"🔗 CONNECTION STRING PRESENT: {!string.IsNullOrWhiteSpace(connectionString)}");
 Console.WriteLine("=======================================");
 
+// =====================
+// Connection string (safe)
+// =====================
+var connectionString = builder.Configuration.GetConnectionString("Default");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
-    throw new InvalidOperationException("❌ Connection string 'Default' is missing.");
+    Console.WriteLine("❌ Connection string 'Default' is MISSING/EMPTY. Check App Service setting: ConnectionStrings__Default");
+}
+else
+{
+    try
+    {
+        var csb = new SqlConnectionStringBuilder(connectionString);
+        Console.WriteLine($"✅ SQL CONFIG | Server={csb.DataSource} | Database={csb.InitialCatalog} | UserID={csb.UserID} | Encrypt={csb.Encrypt}");
+    }
+    catch
+    {
+        Console.WriteLine("⚠️ SQL CONFIG | Could not parse connection string (but it is present).");
+    }
 }
 
 // =====================
-// DB
+// DB (register even if CS missing, to keep app running)
 // =====================
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
     options.UseSqlServer(
-        connectionString,
+        connectionString ?? "",
         sql =>
         {
-            // 🔁 IMPORTANT for Azure SQL (serverless / cold start)
             sql.EnableRetryOnFailure(
-                maxRetryCount: 5,
+                maxRetryCount: 10,
                 maxRetryDelay: TimeSpan.FromSeconds(10),
                 errorNumbersToAdd: null
             );
+            sql.CommandTimeout(120);
         });
 });
 
@@ -64,11 +78,7 @@ builder.Services.AddEndpointsApiExplorer();
 
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "VilarDriverApi",
-        Version = "v1"
-    });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "VilarDriverApi", Version = "v1" });
 
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
@@ -85,11 +95,7 @@ builder.Services.AddSwaggerGen(c =>
         {
             new OpenApiSecurityScheme
             {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
             },
             Array.Empty<string>()
         }
@@ -97,32 +103,43 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // =====================
-// JWT
+// JWT (safe)
 // =====================
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
-var jwt = builder.Configuration.GetSection("Jwt");
-var keyBytes = Encoding.UTF8.GetBytes(jwt["Key"]!);
+var jwtSection = builder.Configuration.GetSection("Jwt");
+var jwtKey = jwtSection["Key"];
+var jwtIssuer = jwtSection["Issuer"];
+var jwtAudience = jwtSection["Audience"];
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.MapInboundClaims = false;
-        options.TokenValidationParameters = new TokenValidationParameters
+if (string.IsNullOrWhiteSpace(jwtKey) || string.IsNullOrWhiteSpace(jwtIssuer) || string.IsNullOrWhiteSpace(jwtAudience))
+{
+    Console.WriteLine("⚠️ JWT config missing (Jwt:Key/Issuer/Audience). Auth may fail until you set App Service settings.");
+}
+else
+{
+    var keyBytes = Encoding.UTF8.GetBytes(jwtKey);
+
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = jwt["Issuer"],
-            ValidAudience = jwt["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
-            RoleClaimType = "role",
-            NameClaimType = "sub"
-        };
-    });
+            options.MapInboundClaims = false;
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = jwtIssuer,
+                ValidAudience = jwtAudience,
+                IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+                RoleClaimType = "role",
+                NameClaimType = "sub"
+            };
+        });
 
-builder.Services.AddAuthorization();
+    builder.Services.AddAuthorization();
+}
 
 // =====================
 // Storage
@@ -136,7 +153,29 @@ Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, stor
 var app = builder.Build();
 
 // =====================
-// Middleware
+// Exception handler (gives response instead of blank crash pages)
+// =====================
+app.UseExceptionHandler(appError =>
+{
+    appError.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+        var ex = feature?.Error;
+
+        if (ex is SqlException sqlEx && sqlEx.Number == 40613)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsync("Database is warming up. Try again in a moment.");
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsync("Internal Server Error");
+    });
+});
+
+// =====================
+// Swagger + static files
 // =====================
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -154,20 +193,16 @@ app.UseAuthorization();
 app.MapControllers();
 
 // =====================
-// DB MIGRATIONS (CONTROLLED)
+// Controlled migrations
 // =====================
 var runMigrationsRaw = Environment.GetEnvironmentVariable("RUN_DB_MIGRATIONS");
 var runMigrations = string.Equals(runMigrationsRaw, "true", StringComparison.OrdinalIgnoreCase);
 
-Console.WriteLine("=======================================");
-Console.WriteLine($"🧪 RUN_DB_MIGRATIONS (raw): {runMigrationsRaw}");
-Console.WriteLine($"🧪 RUN_DB_MIGRATIONS (parsed): {runMigrations}");
-Console.WriteLine("=======================================");
+Console.WriteLine($"🧪 RUN_DB_MIGRATIONS raw='{runMigrationsRaw}' parsed={runMigrations}");
 
 if (runMigrations)
 {
     Console.WriteLine("⚙️ STARTING DATABASE MIGRATIONS");
-
     try
     {
         using var scope = app.Services.CreateScope();
@@ -185,8 +220,6 @@ if (runMigrations)
     {
         Console.WriteLine("❌ DATABASE MIGRATIONS FAILED");
         Console.WriteLine(ex.ToString());
-
-        // ❗ NIE ZABIJA aplikacji w produkcji
     }
 }
 else
@@ -194,8 +227,5 @@ else
     Console.WriteLine("ℹ️ RUN_DB_MIGRATIONS is FALSE – skipping migrations");
 }
 
-// =====================
-// RUN
-// =====================
 Console.WriteLine("✅ APPLICATION STARTED");
 app.Run();
