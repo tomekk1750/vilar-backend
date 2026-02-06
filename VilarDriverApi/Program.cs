@@ -49,20 +49,14 @@ else
 // =====================
 // DB (register even if CS missing, to keep app running)
 // =====================
-builder.Services.AddDbContext<AppDbContext>(options =>
-{
-    options.UseSqlServer(
-        connectionString ?? "",
-        sql =>
-        {
-            sql.EnableRetryOnFailure(
-                maxRetryCount: 10,
-                maxRetryDelay: TimeSpan.FromSeconds(10),
-                errorNumbersToAdd: null
-            );
-            sql.CommandTimeout(120);
-        });
-});
+builder.Services.AddDbContext<AppDbContext>(opt =>
+    opt.UseSqlServer(
+        builder.Configuration.GetConnectionString("Default"),
+        sql => sql.EnableRetryOnFailure(
+            maxRetryCount: 8,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorNumbersToAdd: null
+        )));
 
 // =====================
 // Services
