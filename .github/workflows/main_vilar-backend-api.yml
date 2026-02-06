@@ -50,10 +50,13 @@ jobs:
       contents: read
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: .net-app
+          path: ./artifact
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -66,7 +69,7 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: "vilar-backend-api"
-          package: .
+          package: ./artifact
 
       - name: Enable migrations flag (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations == 'true' }}
