@@ -11,6 +11,9 @@ using Microsoft.Data.SqlClient;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// =====================
+// Global culture
+// =====================
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
@@ -69,7 +72,7 @@ builder.Services.AddCors(options =>
 var jwt = builder.Configuration.GetSection("Jwt");
 var keyBytes = Encoding.UTF8.GetBytes(jwt["Key"]!);
 
-// KLUCZOWE: wyłącz mapowanie claimów
+// Disable claim mapping
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -169,13 +172,15 @@ app.UseAuthorization();
 app.MapControllers();
 
 // =====================
-// DB MIGRATION + SEED
+// DB MIGRATIONS (CONTROLLED)
 // =====================
-if (app.Environment.IsProduction())
-{
-    Console.WriteLine("ℹ️ Production environment detected – skipping Database.Migrate() and DbSeeder");
-}
-else
+var runMigrations = string.Equals(
+    Environment.GetEnvironmentVariable("RUN_DB_MIGRATIONS"),
+    "true",
+    StringComparison.OrdinalIgnoreCase
+);
+
+if (!app.Environment.IsProduction() || runMigrations)
 {
     try
     {
@@ -194,8 +199,16 @@ else
     {
         Console.WriteLine("❌ Database initialization FAILED");
         Console.WriteLine(ex.ToString());
-        throw;
+
+        // Jeśli świadomie odpaliliśmy migracje (RUN_DB_MIGRATIONS=true),
+        // to FAIL jest poprawnym sygnałem dla pipeline
+        if (runMigrations)
+            throw;
     }
+}
+else
+{
+    Console.WriteLine("ℹ️ Production – skipping migrations (RUN_DB_MIGRATIONS != true)");
 }
 
 app.Run();
