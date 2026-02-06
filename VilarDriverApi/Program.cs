@@ -1,13 +1,12 @@
-using System.Text;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using VilarDriverApi.Data;
 using VilarDriverApi.Services;
-using System.Globalization;
-using Microsoft.Data.SqlClient;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,32 +17,38 @@ CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
 // =====================
-// DB
+// Configuration check
 // =====================
 var connectionString = builder.Configuration.GetConnectionString("Default");
 
+Console.WriteLine("=======================================");
+Console.WriteLine("🚀 APPLICATION STARTING");
+Console.WriteLine($"🌍 ENVIRONMENT: {builder.Environment.EnvironmentName}");
+Console.WriteLine($"🔗 CONNECTION STRING PRESENT: {!string.IsNullOrWhiteSpace(connectionString)}");
+Console.WriteLine("=======================================");
+
 if (string.IsNullOrWhiteSpace(connectionString))
 {
-    Console.WriteLine("❌ Connection string 'Default' is NULL or EMPTY");
-}
-else
-{
-    var csb = new SqlConnectionStringBuilder(connectionString);
-    Console.WriteLine(
-        $"✅ SQL CONFIG | Server={csb.DataSource} | Database={csb.InitialCatalog} | UserID={csb.UserID} | Encrypt={csb.Encrypt}"
-    );
+    throw new InvalidOperationException("❌ Connection string 'Default' is missing.");
 }
 
-builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlServer(connectionString, sql =>
-    {
-        // ✅ ważne przy Azure SQL serverless / transient faults
-        sql.EnableRetryOnFailure(
-            maxRetryCount: 10,
-            maxRetryDelay: TimeSpan.FromSeconds(10),
-            errorNumbersToAdd: null
-        );
-    }));
+// =====================
+// DB
+// =====================
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlServer(
+        connectionString,
+        sql =>
+        {
+            // 🔁 IMPORTANT for Azure SQL (serverless / cold start)
+            sql.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(10),
+                errorNumbersToAdd: null
+            );
+        });
+});
 
 // =====================
 // Services
@@ -52,63 +57,11 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<EpodService>();
 
 // =====================
-// Controllers
+// Controllers + Swagger
 // =====================
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// =====================
-// CORS (LOCALHOST ONLY)
-// =====================
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("DevCors", policy =>
-    {
-        policy
-            .WithOrigins(
-                "http://localhost:5173",
-                "http://127.0.0.1:5173"
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod();
-    });
-});
-
-// =====================
-// JWT
-// =====================
-var jwt = builder.Configuration.GetSection("Jwt");
-var keyBytes = Encoding.UTF8.GetBytes(jwt["Key"]!);
-
-// Disable claim mapping
-JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.MapInboundClaims = false;
-
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-
-            ValidIssuer = jwt["Issuer"],
-            ValidAudience = jwt["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
-
-            RoleClaimType = "role",
-            NameClaimType = "sub"
-        };
-    });
-
-builder.Services.AddAuthorization();
-
-// =====================
-// Swagger + JWT
-// =====================
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
@@ -124,7 +77,7 @@ builder.Services.AddSwaggerGen(c =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Wpisz: Bearer {twój_token_JWT}"
+        Description = "Bearer {JWT}"
     });
 
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -144,36 +97,57 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // =====================
-// Storage folder
+// JWT
 // =====================
-var storage = builder.Configuration["Storage:BasePath"] ?? "Storage";
-Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, storage));
+JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+
+var jwt = builder.Configuration.GetSection("Jwt");
+var keyBytes = Encoding.UTF8.GetBytes(jwt["Key"]!);
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwt["Issuer"],
+            ValidAudience = jwt["Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+            RoleClaimType = "role",
+            NameClaimType = "sub"
+        };
+    });
+
+builder.Services.AddAuthorization();
 
 // =====================
-// BUILD
+// Storage
+// =====================
+var storagePath = builder.Configuration["Storage:BasePath"] ?? "Storage";
+Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, storagePath));
+
+// =====================
+// BUILD APP
 // =====================
 var app = builder.Build();
 
 // =====================
-// Swagger
+// Middleware
 // =====================
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// =====================
-// Static files /files/...
-// =====================
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
-        Path.Combine(app.Environment.ContentRootPath, storage)),
+        Path.Combine(app.Environment.ContentRootPath, storagePath)),
     RequestPath = "/files"
 });
 
-// =====================
-// Middleware
-// =====================
-app.UseCors("DevCors");
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -182,65 +156,46 @@ app.MapControllers();
 // =====================
 // DB MIGRATIONS (CONTROLLED)
 // =====================
-var runMigrations = string.Equals(
-    Environment.GetEnvironmentVariable("RUN_DB_MIGRATIONS"),
-    "true",
-    StringComparison.OrdinalIgnoreCase
-);
+var runMigrationsRaw = Environment.GetEnvironmentVariable("RUN_DB_MIGRATIONS");
+var runMigrations = string.Equals(runMigrationsRaw, "true", StringComparison.OrdinalIgnoreCase);
 
-if (!app.Environment.IsProduction() || runMigrations)
+Console.WriteLine("=======================================");
+Console.WriteLine($"🧪 RUN_DB_MIGRATIONS (raw): {runMigrationsRaw}");
+Console.WriteLine($"🧪 RUN_DB_MIGRATIONS (parsed): {runMigrations}");
+Console.WriteLine("=======================================");
+
+if (runMigrations)
 {
+    Console.WriteLine("⚙️ STARTING DATABASE MIGRATIONS");
+
     try
     {
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        Console.WriteLine("ℹ️ Running Database.Migrate() with retry (serverless warm-up)");
+        Console.WriteLine("📦 Applying EF Core migrations...");
+        db.Database.Migrate();
 
-        var attempts = 0;
-        var maxAttempts = 12; // ~2 min przy 10s delay
-
-        while (true)
-        {
-            try
-            {
-                attempts++;
-                db.Database.Migrate();
-                break;
-            }
-            catch (SqlException ex) when (
-                ex.Number == 40613 || // Database not available
-                ex.Number == 40197 || // Service encountered an error
-                ex.Number == 40501 || // Service is busy
-                ex.Number == 49918 || ex.Number == 49919 || ex.Number == 49920 // throttling / busy
-            )
-            {
-                if (attempts >= maxAttempts) throw;
-
-                Console.WriteLine($"⚠️ SQL transient error {ex.Number}. Retry {attempts}/{maxAttempts} in 10s...");
-                await Task.Delay(TimeSpan.FromSeconds(10));
-            }
-        }
-
-        Console.WriteLine("ℹ️ Running DbSeeder");
+        Console.WriteLine("🌱 Running database seeder...");
         DbSeeder.Seed(db);
 
-        Console.WriteLine("✅ Database initialized successfully");
+        Console.WriteLine("✅ DATABASE MIGRATIONS COMPLETED");
     }
     catch (Exception ex)
     {
-        Console.WriteLine("❌ Database initialization FAILED");
+        Console.WriteLine("❌ DATABASE MIGRATIONS FAILED");
         Console.WriteLine(ex.ToString());
 
-        // Jeśli świadomie odpaliliśmy migracje (RUN_DB_MIGRATIONS=true),
-        // to FAIL jest poprawnym sygnałem dla workflow
-        if (runMigrations)
-            throw;
+        // ❗ NIE ZABIJA aplikacji w produkcji
     }
 }
 else
 {
-    Console.WriteLine("ℹ️ Production – skipping migrations (RUN_DB_MIGRATIONS != true)");
+    Console.WriteLine("ℹ️ RUN_DB_MIGRATIONS is FALSE – skipping migrations");
 }
 
+// =====================
+// RUN
+// =====================
+Console.WriteLine("✅ APPLICATION STARTED");
 app.Run();
