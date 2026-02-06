@@ -50,13 +50,10 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: .net-app
-          path: ./artifact
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -69,7 +66,7 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: "vilar-backend-api"
-          package: ./artifact
+          package: .
 
       - name: Enable migrations flag (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations == 'true' }}
@@ -80,7 +77,6 @@ jobs:
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --name "vilar-backend-api" \
               --settings RUN_DB_MIGRATIONS=true
-
       - name: Wait for SQL warm-up
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations == 'true' }}
         run: sleep 30
@@ -93,7 +89,6 @@ jobs:
             az webapp restart \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --name "vilar-backend-api"
-
       - name: Disable migrations flag
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations == 'true' }}
         uses: azure/cli@v2
