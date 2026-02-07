@@ -63,6 +63,7 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 // =====================
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<EpodService>();
+builder.Services.AddSingleton<BlobStorageService>();
 
 // =====================
 // Controllers + Swagger

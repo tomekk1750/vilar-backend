@@ -149,7 +149,7 @@ namespace VilarDriverApi.Controllers
                     o.ContractorName,
                     o.PaymentDueDate,
 
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.PdfRelativePath : null,
+                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null,
                     invoiceRelPath = o.InvoicePdfRelativePath
                 })
                 .ToListAsync();
@@ -246,7 +246,7 @@ namespace VilarDriverApi.Controllers
                     o.ContractorName,
                     o.PaymentDueDate,
 
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.PdfRelativePath : null,
+                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null,
                     invoiceRelPath = o.InvoicePdfRelativePath
                 })
                 .ToListAsync();
@@ -550,7 +550,7 @@ namespace VilarDriverApi.Controllers
 
             if (order == null) return NotFound();
 
-            if (order.EpodFile == null || string.IsNullOrWhiteSpace(order.EpodFile.PdfRelativePath))
+            if (order.EpodFile == null || string.IsNullOrWhiteSpace(order.EpodFile.BlobName))
                 return BadRequest(new { message = "Nie można zamknąć zlecenia bez POD." });
 
             order.IsCompletedByAdmin = true;

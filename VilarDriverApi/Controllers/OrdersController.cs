@@ -140,7 +140,7 @@ namespace VilarDriverApi.Controllers
                     o.CargoInfo,
                     o.DriverId,
                     status = o.Status.ToString(),
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.PdfRelativePath : null
+                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null
                 })
                 .ToListAsync();
 
@@ -164,7 +164,8 @@ namespace VilarDriverApi.Controllers
                     o.CargoInfo,
                     o.DriverId,
                     o.status,
-                    epodUrl = ToFilesUrl(baseUrl, o.epodRelPath),
+                    epodUrl = (string?)null,
+                    epodBlobName = o.epodRelPath,
 
                     // ✅ jeśli chcesz “wisienkę” (możesz też usunąć)
                     lastProblemNote = p?.LastProblemNote,
@@ -225,7 +226,7 @@ namespace VilarDriverApi.Controllers
                     o.CargoInfo,
                     o.DriverId,
                     status = o.Status.ToString(),
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.PdfRelativePath : null
+                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null
                 })
                 .ToListAsync();
 
@@ -248,7 +249,8 @@ namespace VilarDriverApi.Controllers
                     o.CargoInfo,
                     o.DriverId,
                     o.status,
-                    epodUrl = ToFilesUrl(baseUrl, o.epodRelPath),
+                    epodUrl = (string?)null,
+                    epodBlobName = o.epodRelPath,
 
                     lastProblemNote = p?.LastProblemNote,
                     problemAtStatus = p?.ProblemAtStatus
@@ -295,7 +297,7 @@ namespace VilarDriverApi.Controllers
                     o.CargoInfo,
                     o.DriverId,
                     status = o.Status.ToString(),
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.PdfRelativePath : null
+                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null
                 })
                 .ToListAsync();
 
@@ -318,7 +320,8 @@ namespace VilarDriverApi.Controllers
                     o.CargoInfo,
                     o.DriverId,
                     o.status,
-                    epodUrl = ToFilesUrl(baseUrl, o.epodRelPath),
+                    epodUrl = (string?)null,
+                    epodBlobName = o.epodRelPath,
 
                     lastProblemNote = p?.LastProblemNote,
                     problemAtStatus = p?.ProblemAtStatus
@@ -384,6 +387,7 @@ namespace VilarDriverApi.Controllers
         // =========================================================
         [HttpPost("{id:int}/epod")]
         [RequestSizeLimit(50_000_000)]
+        [Obsolete("Deprecated. Use /api/epod/{orderId}/upload-sas + /api/epod/{orderId}/attach instead.", true)]
         public async Task<IActionResult> UploadEpod(
             int id,
             [FromForm] List<IFormFile> photos,
@@ -448,6 +452,7 @@ namespace VilarDriverApi.Controllers
 
         [HttpPost("{id:int}/epod/upload")]
         [RequestSizeLimit(50_000_000)]
+        [Obsolete("Deprecated. Use /api/epod/{orderId}/upload-sas + /api/epod/{orderId}/attach instead.", true)]
         public async Task<IActionResult> UploadEpodUpload(int id, [FromForm] EpodUploadForm form)
         {
             var role = Role();
@@ -520,7 +525,7 @@ namespace VilarDriverApi.Controllers
                 order.EpodFile = new EpodFile
                 {
                     OrderId = order.Id,
-                    PdfRelativePath = pdfRel,
+                    BlobName = pdfRel,
                     CreatedUtc = DateTime.UtcNow,
                     Lat = lat,
                     Lng = lng
@@ -528,7 +533,7 @@ namespace VilarDriverApi.Controllers
             }
             else
             {
-                order.EpodFile.PdfRelativePath = pdfRel;
+                order.EpodFile.BlobName = pdfRel;
                 order.EpodFile.CreatedUtc = DateTime.UtcNow;
                 order.EpodFile.Lat = lat;
                 order.EpodFile.Lng = lng;
