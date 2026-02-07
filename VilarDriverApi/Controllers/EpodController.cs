@@ -20,8 +20,8 @@ namespace VilarDriverApi.Controllers
             _blob = blob;
         }
 
-        private bool IsAdmin => User.IsInRole("admin");
-        private bool IsDriver => User.IsInRole("driver");
+        private bool IsAdmin => User.IsInRole("Admin") || User.IsInRole("admin");
+        private bool IsDriver => User.IsInRole("Driver") || User.IsInRole("driver");
 
         private bool TryGetUserId(out int userId)
         {
@@ -54,7 +54,7 @@ namespace VilarDriverApi.Controllers
         public record UploadSasResponse(string BlobName, string UploadUrl);
 
         // Admin + Driver: SAS do uploadu (driver tylko dla swoich zleceń)
-        [Authorize(Roles = "admin,driver")]
+        [Authorize(Roles = "Admin,Driver,admin,driver")]
         [HttpPost("{orderId:int}/upload-sas")]
         public async Task<ActionResult<UploadSasResponse>> GetUploadSas(int orderId)
         {
@@ -146,7 +146,7 @@ namespace VilarDriverApi.Controllers
         public record DownloadSasResponse(string DownloadUrl);
 
         // Tylko admin pobiera
-        [Authorize(Roles = "admin")]
+        [Authorize(Roles = "Admin,admin")]
         [HttpGet("{orderId:int}/download-sas")]
         public async Task<ActionResult<DownloadSasResponse>> GetDownloadSas(int orderId)
         {
