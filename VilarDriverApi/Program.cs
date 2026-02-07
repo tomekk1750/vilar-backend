@@ -59,6 +59,22 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
         )));
 
 // =====================
+// CORS (Frontend -> API)
+// =====================
+// IMPORTANT: Must be enabled for the exact SWA origin to allow OPTIONS preflight + JWT Authorization header.
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Frontend", policy =>
+    {
+        policy
+            .WithOrigins("https://ambitious-pond-059649d03.2.azurestaticapps.net")
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+        // No AllowCredentials() needed for JWT in Authorization header
+    });
+});
+
+// =====================
 // Services
 // =====================
 builder.Services.AddScoped<AuthService>();
@@ -181,6 +197,11 @@ app.UseStaticFiles(new StaticFileOptions
         Path.Combine(app.Environment.ContentRootPath, storagePath)),
     RequestPath = "/files"
 });
+
+// =====================
+// CORS MUST be here (before auth) so OPTIONS preflight works
+// =====================
+app.UseCors("Frontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
