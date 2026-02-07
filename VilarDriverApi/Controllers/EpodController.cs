@@ -1,3 +1,4 @@
+using System;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,11 +14,13 @@ namespace VilarDriverApi.Controllers
     {
         private readonly AppDbContext _db;
         private readonly BlobStorageService _blob;
+        private readonly EpodService _epod;
 
-        public EpodController(AppDbContext db, BlobStorageService blob)
+        public EpodController(AppDbContext db, BlobStorageService blob, EpodService epod)
         {
             _db = db;
             _blob = blob;
+            _epod = epod;
         }
 
         private bool IsAdmin => User.IsInRole("Admin") || User.IsInRole("admin");
@@ -28,6 +31,7 @@ namespace VilarDriverApi.Controllers
             var userIdStr = User.FindFirst("sub")?.Value; // NameClaimType="sub"
             return int.TryParse(userIdStr, out userId);
         }
+
         private async Task<int?> GetDriverIdForCurrentUserAsync()
         {
             if (!TryGetUserId(out var userId))
@@ -41,7 +45,6 @@ namespace VilarDriverApi.Controllers
 
         private async Task<bool> DriverOwnsOrderAsync(Order order)
         {
-            // DriverId wyliczamy tylko z DB na podstawie sub(UserId)
             var driverId = await GetDriverIdForCurrentUserAsync();
             if (driverId is null)
                 return false;
@@ -51,6 +54,7 @@ namespace VilarDriverApi.Controllers
 
             return order.DriverId.Value == driverId.Value;
         }
+
         public record UploadSasResponse(string BlobName, string UploadUrl);
 
         // Admin + Driver: SAS do uploadu (driver tylko dla swoich zleceń)
@@ -61,19 +65,20 @@ namespace VilarDriverApi.Controllers
             var order = await _db.Orders.AsNoTracking().FirstOrDefaultAsync(o => o.Id == orderId);
             if (order is null)
                 return NotFound("Order not found.");
+
             if (IsDriver && order.IsCompletedByAdmin)
                 return Forbid("Order is completed and locked by admin.");
 
             if (IsDriver && !IsAdmin)
-        {
-            var driverId = await GetDriverIdForCurrentUserAsync();
-            if (driverId is null)
-                return Forbid("Driver profile not found.");
+            {
+                var driverId = await GetDriverIdForCurrentUserAsync();
+                if (driverId is null)
+                    return Forbid("Driver profile not found.");
 
-            var isMyOrder = await DriverOwnsOrderAsync(order);
-            if (!isMyOrder)
-                return Forbid("Driver cannot upload ePOD for someone else's order.");
-        }
+                var isMyOrder = await DriverOwnsOrderAsync(order);
+                if (!isMyOrder)
+                    return Forbid("Driver cannot upload ePOD for someone else's order.");
+            }
 
             var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
             var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
@@ -85,7 +90,7 @@ namespace VilarDriverApi.Controllers
 
         // Admin: create + overwrite
         // Driver: tylko create, tylko raz, tylko Delivered, tylko swoje zlecenia
-        [Authorize(Roles = "admin,driver")]
+        [Authorize(Roles = "Admin,Driver,admin,driver")]
         [HttpPost("{orderId:int}/attach")]
         public async Task<IActionResult> Attach(int orderId, [FromBody] AttachRequest req)
         {
@@ -95,28 +100,33 @@ namespace VilarDriverApi.Controllers
             var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == orderId);
             if (order is null)
                 return NotFound("Order not found.");
+
             if (IsDriver && order.IsCompletedByAdmin)
                 return Forbid("Order is completed and locked by admin.");
+
+            // ✅ Guard: blob musi istnieć, żeby nie zapisać w DB śmieci
+            if (!await _blob.BlobExistsAsync(req.BlobName))
+                return BadRequest("Blob does not exist.");
 
             var existing = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
 
             if (IsDriver && !IsAdmin)
-        {
-            var driverId = await GetDriverIdForCurrentUserAsync();
-            if (driverId is null)
-                return Forbid("Driver profile not found.");
+            {
+                var driverId = await GetDriverIdForCurrentUserAsync();
+                if (driverId is null)
+                    return Forbid("Driver profile not found.");
 
-            var isMyOrder = await DriverOwnsOrderAsync(order);
-            if (!isMyOrder)
-                return Forbid("Driver cannot add ePOD for someone else's order.");
+                var isMyOrder = await DriverOwnsOrderAsync(order);
+                if (!isMyOrder)
+                    return Forbid("Driver cannot add ePOD for someone else's order.");
 
-            if (existing is not null)
-                return Forbid("Driver cannot edit or overwrite existing ePOD.");
+                if (existing is not null)
+                    return Forbid("Driver cannot edit or overwrite existing ePOD.");
 
-            if (order.Status != OrderStatus.Delivered)
-                return StatusCode(StatusCodes.Status409Conflict,
-                    "ePOD can be added only when order status is Delivered.");
-        }
+                if (order.Status != OrderStatus.Delivered)
+                    return StatusCode(StatusCodes.Status409Conflict,
+                        "ePOD can be added only when order status is Delivered.");
+            }
 
             if (existing is null)
             {
@@ -156,6 +166,86 @@ namespace VilarDriverApi.Controllers
 
             var sasUri = _blob.CreateDownloadSas(epod.BlobName, TimeSpan.FromMinutes(5));
             return Ok(new DownloadSasResponse(sasUri.ToString()));
+        }
+
+        // Zdjęcia -> PDF -> Blob -> DB (tak jak attach), z tymi samymi zasadami security
+        [Authorize(Roles = "Admin,Driver,admin,driver")]
+        [HttpPost("{orderId:int}/from-photos")]
+        [RequestSizeLimit(50_000_000)]
+        public async Task<IActionResult> CreatePdfFromPhotosAndUpload(
+            int orderId,
+            [FromForm] List<IFormFile> photos,
+            [FromForm] double? lat,
+            [FromForm] double? lng)
+        {
+            var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == orderId);
+            if (order is null)
+                return NotFound("Order not found.");
+
+            if (IsDriver && order.IsCompletedByAdmin)
+                return Forbid("Order is completed and locked by admin.");
+
+            var existing = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
+
+            if (IsDriver && !IsAdmin)
+            {
+                var driverId = await GetDriverIdForCurrentUserAsync();
+                if (driverId is null)
+                    return Forbid("Driver profile not found.");
+
+                var isMyOrder = await DriverOwnsOrderAsync(order);
+                if (!isMyOrder)
+                    return Forbid("Driver cannot add ePOD for someone else's order.");
+
+                if (existing is not null)
+                    return Forbid("Driver cannot edit or overwrite existing ePOD.");
+
+                if (order.Status != OrderStatus.Delivered)
+                    return StatusCode(StatusCodes.Status409Conflict,
+                        "ePOD can be added only when order status is Delivered.");
+            }
+
+            if (photos == null || photos.Count == 0)
+                return BadRequest("No photos provided.");
+
+            // 1) Zbuduj PDF lokalnie (tymczasowo)
+            var relPdfPath = await _epod.BuildPdfFromPhotosAsync(orderId, photos);
+            var absPdfPath = _epod.GetAbsolutePath(relPdfPath);
+
+            // 2) Upload do Blob
+            var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
+            await using (var fs = System.IO.File.OpenRead(absPdfPath))
+            {
+                await _blob.UploadAsync(blobName, fs, "application/pdf");
+            }
+
+            // 3) Usuń lokalny plik
+            try { System.IO.File.Delete(absPdfPath); } catch { /* ignore */ }
+
+            // 4) Zapis do DB
+            if (existing is null)
+            {
+                existing = new EpodFile
+                {
+                    OrderId = orderId,
+                    BlobName = blobName,
+                    CreatedUtc = DateTime.UtcNow,
+                    Lat = lat,
+                    Lng = lng
+                };
+                _db.EpodFiles.Add(existing);
+            }
+            else
+            {
+                // Admin overwrite
+                existing.BlobName = blobName;
+                existing.CreatedUtc = DateTime.UtcNow;
+                existing.Lat = lat;
+                existing.Lng = lng;
+            }
+
+            await _db.SaveChangesAsync();
+            return Ok(new { blobName });
         }
     }
 }

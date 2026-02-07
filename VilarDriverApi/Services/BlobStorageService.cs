@@ -1,5 +1,6 @@
 using Azure.Storage;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
 
 namespace VilarDriverApi.Services
@@ -8,6 +9,7 @@ namespace VilarDriverApi.Services
     {
         private readonly string _connString;
         private readonly string _containerName;
+        private readonly BlobContainerClient _container;
 
         public BlobStorageService(IConfiguration config)
         {
@@ -15,19 +17,35 @@ namespace VilarDriverApi.Services
                 ?? throw new InvalidOperationException("Missing AzureStorage:ConnectionString (AzureStorage__ConnectionString).");
 
             _containerName = config["AzureStorage:ContainerName"] ?? "epod";
+
+            _container = new BlobContainerClient(_connString, _containerName);
+            _container.CreateIfNotExists(PublicAccessType.None);
         }
 
-        private BlobContainerClient GetContainer()
+        public async Task UploadAsync(string blobName, Stream content, string contentType)
         {
-            var container = new BlobContainerClient(_connString, _containerName);
-            container.CreateIfNotExists();
-            return container;
+            if (content is null) throw new ArgumentNullException(nameof(content));
+            if (content.CanSeek) content.Position = 0;
+
+            var blobClient = _container.GetBlobClient(blobName);
+
+            await blobClient.UploadAsync(content, overwrite: true);
+
+            await blobClient.SetHttpHeadersAsync(new BlobHttpHeaders
+            {
+                ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/pdf" : contentType
+            });
+        }
+
+        public async Task<bool> BlobExistsAsync(string blobName)
+        {
+            var blob = _container.GetBlobClient(blobName);
+            return await blob.ExistsAsync();
         }
 
         public Uri CreateUploadSas(string blobName, string contentType, TimeSpan ttl)
         {
-            var container = GetContainer();
-            var blobClient = container.GetBlobClient(blobName);
+            var blobClient = _container.GetBlobClient(blobName);
 
             var (accountName, accountKey) = ExtractAccountNameAndKey(_connString);
             var credential = new StorageSharedKeyCredential(accountName, accountKey);
@@ -42,7 +60,6 @@ namespace VilarDriverApi.Services
                 ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/pdf" : contentType
             };
 
-            // Upload only: create + write
             sasBuilder.SetPermissions(BlobSasPermissions.Create | BlobSasPermissions.Write);
 
             var sas = sasBuilder.ToSasQueryParameters(credential).ToString();
@@ -51,8 +68,7 @@ namespace VilarDriverApi.Services
 
         public Uri CreateDownloadSas(string blobName, TimeSpan ttl)
         {
-            var container = GetContainer();
-            var blobClient = container.GetBlobClient(blobName);
+            var blobClient = _container.GetBlobClient(blobName);
 
             var (accountName, accountKey) = ExtractAccountNameAndKey(_connString);
             var credential = new StorageSharedKeyCredential(accountName, accountKey);
@@ -66,7 +82,6 @@ namespace VilarDriverApi.Services
                 ExpiresOn = DateTimeOffset.UtcNow.Add(ttl)
             };
 
-            // Download only: read
             sasBuilder.SetPermissions(BlobSasPermissions.Read);
 
             var sas = sasBuilder.ToSasQueryParameters(credential).ToString();

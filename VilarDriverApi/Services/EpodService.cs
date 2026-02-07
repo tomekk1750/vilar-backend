@@ -17,6 +17,11 @@ namespace VilarDriverApi.Services
             Directory.CreateDirectory(Path.Combine(_storageRoot, "epod"));
             Directory.CreateDirectory(Path.Combine(_storageRoot, "tmp"));
         }
+        public string GetAbsolutePath(string relPath)
+        {
+            var safeRel = relPath.Replace("/", Path.DirectorySeparatorChar.ToString());
+            return Path.Combine(_storageRoot, safeRel);
+        }
 
         /// <summary>
         /// Zapisuje gotowy PDF (bez konwersji) do Storage/epod i zwraca ścieżkę względną (np. "epod/epod_1_20260116_203000.pdf")
