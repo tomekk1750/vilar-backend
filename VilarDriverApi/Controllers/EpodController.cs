@@ -28,18 +28,29 @@ namespace VilarDriverApi.Controllers
             var userIdStr = User.FindFirst("sub")?.Value; // NameClaimType="sub"
             return int.TryParse(userIdStr, out userId);
         }
+        private async Task<int?> GetDriverIdForCurrentUserAsync()
+        {
+            if (!TryGetUserId(out var userId))
+                return null;
+
+            return await _db.Drivers
+                .Where(d => d.UserId == userId)
+                .Select(d => (int?)d.Id)
+                .FirstOrDefaultAsync();
+        }
 
         private async Task<bool> DriverOwnsOrderAsync(Order order)
         {
-            if (!TryGetUserId(out var userId))
+            // DriverId wyliczamy tylko z DB na podstawie sub(UserId)
+            var driverId = await GetDriverIdForCurrentUserAsync();
+            if (driverId is null)
                 return false;
 
             if (order.DriverId is null)
                 return false;
 
-            return await _db.Drivers.AnyAsync(d => d.Id == order.DriverId && d.UserId == userId);
+            return order.DriverId.Value == driverId.Value;
         }
-
         public record UploadSasResponse(string BlobName, string UploadUrl);
 
         // Admin + Driver: SAS do uploadu (driver tylko dla swoich zleceń)
@@ -50,16 +61,19 @@ namespace VilarDriverApi.Controllers
             var order = await _db.Orders.AsNoTracking().FirstOrDefaultAsync(o => o.Id == orderId);
             if (order is null)
                 return NotFound("Order not found.");
+            if (IsDriver && order.IsCompletedByAdmin)
+                return Forbid("Order is completed and locked by admin.");
 
             if (IsDriver && !IsAdmin)
-            {
-                if (!TryGetUserId(out _))
-                    return Unauthorized("Invalid token (missing/invalid sub).");
+        {
+            var driverId = await GetDriverIdForCurrentUserAsync();
+            if (driverId is null)
+                return Forbid("Driver profile not found.");
 
-                var isMyOrder = await DriverOwnsOrderAsync(order);
-                if (!isMyOrder)
-                    return Forbid("Driver cannot upload ePOD for someone else's order.");
-            }
+            var isMyOrder = await DriverOwnsOrderAsync(order);
+            if (!isMyOrder)
+                return Forbid("Driver cannot upload ePOD for someone else's order.");
+        }
 
             var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
             var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
@@ -81,25 +95,28 @@ namespace VilarDriverApi.Controllers
             var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == orderId);
             if (order is null)
                 return NotFound("Order not found.");
+            if (IsDriver && order.IsCompletedByAdmin)
+                return Forbid("Order is completed and locked by admin.");
 
             var existing = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
 
             if (IsDriver && !IsAdmin)
-            {
-                if (!TryGetUserId(out _))
-                    return Unauthorized("Invalid token (missing/invalid sub).");
+        {
+            var driverId = await GetDriverIdForCurrentUserAsync();
+            if (driverId is null)
+                return Forbid("Driver profile not found.");
 
-                var isMyOrder = await DriverOwnsOrderAsync(order);
-                if (!isMyOrder)
-                    return Forbid("Driver cannot add ePOD for someone else's order.");
+            var isMyOrder = await DriverOwnsOrderAsync(order);
+            if (!isMyOrder)
+                return Forbid("Driver cannot add ePOD for someone else's order.");
 
-                if (existing is not null)
-                    return Forbid("Driver cannot edit or overwrite existing ePOD.");
+            if (existing is not null)
+                return Forbid("Driver cannot edit or overwrite existing ePOD.");
 
-                if (order.Status != OrderStatus.Delivered)
-                    return StatusCode(StatusCodes.Status409Conflict,
-                        "ePOD can be added only when order status is Delivered.");
-            }
+            if (order.Status != OrderStatus.Delivered)
+                return StatusCode(StatusCodes.Status409Conflict,
+                    "ePOD can be added only when order status is Delivered.");
+        }
 
             if (existing is null)
             {
