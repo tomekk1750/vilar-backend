@@ -78,9 +78,13 @@ builder.Services.AddCors(options =>
         }
 
         policy
-            .WithOrigins(origins)
-            .AllowAnyHeader()
-            .AllowAnyMethod();
+             .WithOrigins(origins)
+            .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
+            .WithHeaders("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With")
+            // jeśli w FE potrzebujesz odczytać nazwę pliku z nagłówka przy download:
+            .WithExposedHeaders("Content-Disposition")
+            // JWT w Authorization header => nie potrzebujemy cookies/credentials
+            .DisallowCredentials();
     });
 });
 
