@@ -21,6 +21,7 @@ namespace VilarDriverApi.Controllers
 
         // GET /api/health
         [HttpGet("health")]
+        [HttpHead("health")]
         [AllowAnonymous]
         public async Task<IActionResult> Health()
         {

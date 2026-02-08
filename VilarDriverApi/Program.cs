@@ -66,11 +66,21 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
     {
+        var origins =
+            builder.Configuration.GetSection("Cors:Origins").Get<string[]>()
+            ?? Array.Empty<string>();
+
+        if (origins.Length == 0)
+        {
+            // Bez originów: nie otwieramy CORS na świat.
+            // Zostawiamy politykę "zamkniętą" => przeglądarka i tak zablokuje cross-site.
+            return;
+        }
+
         policy
-            .WithOrigins("https://ambitious-pond-059649d03.2.azurestaticapps.net")
+            .WithOrigins(origins)
             .AllowAnyHeader()
             .AllowAnyMethod();
-        // No AllowCredentials() needed for JWT in Authorization header
     });
 });
 
