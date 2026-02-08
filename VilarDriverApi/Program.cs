@@ -50,13 +50,24 @@ else
 // DB (register even if CS missing, to keep app running)
 // =====================
 builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlServer(
-        builder.Configuration.GetConnectionString("Default"),
-        sql => sql.EnableRetryOnFailure(
-            maxRetryCount: 8,
-            maxRetryDelay: TimeSpan.FromSeconds(10),
-            errorNumbersToAdd: null
-        )));
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        var sqliteCs = builder.Configuration.GetConnectionString("Sqlite")
+                      ?? "Data Source=app.dev.db";
+        opt.UseSqlite(sqliteCs);
+    }
+    else
+    {
+        opt.UseSqlServer(
+            builder.Configuration.GetConnectionString("Default"),
+            sql => sql.EnableRetryOnFailure(
+                maxRetryCount: 8,
+                maxRetryDelay: TimeSpan.FromSeconds(10),
+                errorNumbersToAdd: null
+            ));
+    }
+});
 
 // =====================
 // CORS (Frontend -> API)
