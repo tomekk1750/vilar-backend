@@ -189,26 +189,33 @@ Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, stor
 var app = builder.Build();
 
 // =====================
-// Exception handler (gives response instead of blank crash pages)
+// Exception handler
 // =====================
-app.UseExceptionHandler(appError =>
+if (app.Environment.IsDevelopment())
 {
-    appError.Run(async context =>
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    app.UseExceptionHandler(appError =>
     {
-        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
-        var ex = feature?.Error;
-
-        if (ex is SqlException sqlEx && sqlEx.Number == 40613)
+        appError.Run(async context =>
         {
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            await context.Response.WriteAsync("Database is warming up. Try again in a moment.");
-            return;
-        }
+            var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+            var ex = feature?.Error;
 
-        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-        await context.Response.WriteAsync("Internal Server Error");
+            if (ex is SqlException sqlEx && sqlEx.Number == 40613)
+            {
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await context.Response.WriteAsync("Database is warming up. Try again in a moment.");
+                return;
+            }
+
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await context.Response.WriteAsync("Internal Server Error");
+        });
     });
-});
+}
 
 // =====================
 // Swagger + static files
