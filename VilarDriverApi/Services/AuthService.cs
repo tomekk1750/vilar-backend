@@ -42,6 +42,25 @@ namespace VilarDriverApi.Services
             return (true, token, user);
         }
 
+        // NEW: change password for currently logged-in user (by sub claim)
+        // Returns false if current password is invalid OR user not found.
+        public async Task<bool> ChangePasswordAsync(string sub, string currentPassword, string newPassword)
+        {
+            if (string.IsNullOrWhiteSpace(sub)) return false;
+            if (!int.TryParse(sub, out var userId)) return false;
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null) return false;
+
+            var currentHash = HashPassword(currentPassword);
+            if (!string.Equals(user.PasswordHash, currentHash, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            user.PasswordHash = HashPassword(newPassword);
+            await _db.SaveChangesAsync();
+            return true;
+        }
+
         private string CreateJwt(User user)
         {
             var jwt = _cfg.GetSection("Jwt");
