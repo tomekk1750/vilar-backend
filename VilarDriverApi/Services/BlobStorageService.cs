@@ -27,6 +27,7 @@ namespace VilarDriverApi.Services
             if (content is null) throw new ArgumentNullException(nameof(content));
             if (content.CanSeek) content.Position = 0;
 
+            blobName = NormalizeBlobName(blobName);
             var blobClient = _container.GetBlobClient(blobName);
 
             await blobClient.UploadAsync(content, overwrite: true);
@@ -39,12 +40,14 @@ namespace VilarDriverApi.Services
 
         public async Task<bool> BlobExistsAsync(string blobName)
         {
-            var blob = _container.GetBlobClient(blobName);
+            blobName = NormalizeBlobName(blobName);
+        var blob = _container.GetBlobClient(blobName);
             return await blob.ExistsAsync();
         }
 
         public Uri CreateUploadSas(string blobName, string contentType, TimeSpan ttl)
         {
+            blobName = NormalizeBlobName(blobName);
             var blobClient = _container.GetBlobClient(blobName);
 
             var (accountName, accountKey) = ExtractAccountNameAndKey(_connString);
@@ -68,6 +71,7 @@ namespace VilarDriverApi.Services
 
         public Uri CreateDownloadSas(string blobName, TimeSpan ttl)
         {
+            blobName = NormalizeBlobName(blobName);
             var blobClient = _container.GetBlobClient(blobName);
 
             var (accountName, accountKey) = ExtractAccountNameAndKey(_connString);
@@ -86,6 +90,30 @@ namespace VilarDriverApi.Services
 
             var sas = sasBuilder.ToSasQueryParameters(credential).ToString();
             return new UriBuilder(blobClient.Uri) { Query = sas }.Uri;
+        }
+
+
+        private string NormalizeBlobName(string blobName)
+        {
+            if (string.IsNullOrWhiteSpace(blobName))
+                throw new ArgumentException("blobName is required", nameof(blobName));
+
+            var name = blobName.Trim().TrimStart('/');
+
+            // Jeśli ktoś przez pomyłkę zapisze "epod/..." a _containerName == "epod",
+            // to usuwamy ten prefix, bo kontener już to reprezentuje.
+            var prefix = _containerName.Trim().Trim('/');
+            if (!string.IsNullOrWhiteSpace(prefix))
+            {
+                var p = prefix + "/";
+                if (name.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+                    name = name.Substring(p.Length);
+            }
+
+            // Ochrona przed przypadkiem "epod/epod_xxx" kiedy prefix już był dopisywany gdzie indziej
+            // (po usunięciu 1x powyżej zostanie "epod_xxx" i będzie OK).
+
+            return name;
         }
 
         private static (string accountName, string accountKey) ExtractAccountNameAndKey(string connString)
