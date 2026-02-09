@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using VilarDriverApi.Data;
 using VilarDriverApi.Models;
+using VilarDriverApi.Services;
 
 namespace VilarDriverApi.Controllers
 {
@@ -13,11 +14,13 @@ namespace VilarDriverApi.Controllers
     {
         private readonly AppDbContext _db;
         private readonly IWebHostEnvironment _env;
+        private readonly BlobStorageService _blob;
 
-        public AdminOrdersController(AppDbContext db, IWebHostEnvironment env)
+        public AdminOrdersController(AppDbContext db, IWebHostEnvironment env, BlobStorageService blob)
         {
             _db = db;
             _env = env;
+            _blob = blob;
         }
 
         // ============================
@@ -85,6 +88,24 @@ namespace VilarDriverApi.Controllers
 
         private string BaseUrl() => $"{Request.Scheme}://{Request.Host}";
 
+        // ✅ Helper: SAS download URL for epod blob
+        private string? TryMakeEpodDownloadUrl(string? blobName)
+        {
+            if (string.IsNullOrWhiteSpace(blobName)) return null;
+
+            try
+            {
+                // TTL np. 10 minut (możesz zmienić)
+                var sas = _blob.CreateDownloadSas(blobName, TimeSpan.FromMinutes(10));
+                return sas.ToString();
+            }
+            catch
+            {
+                // Jeśli coś z configiem storage nie gra, nie wywalaj całego endpointu
+                return null;
+            }
+        }
+
         // ============================
         // Helpers: auto order number
         // ============================
@@ -149,7 +170,7 @@ namespace VilarDriverApi.Controllers
                     o.ContractorName,
                     o.PaymentDueDate,
 
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null,
+                    epodBlobName = o.EpodFile != null ? o.EpodFile.BlobName : null,
                     invoiceRelPath = o.InvoicePdfRelativePath
                 })
                 .ToListAsync();
@@ -162,6 +183,8 @@ namespace VilarDriverApi.Controllers
             return Ok(orders.Select(o =>
             {
                 problemInfo.TryGetValue(o.Id, out var p);
+
+                var epodDownloadUrl = TryMakeEpodDownloadUrl(o.epodBlobName);
 
                 return new
                 {
@@ -190,7 +213,13 @@ namespace VilarDriverApi.Controllers
                     o.ContractorName,
                     o.PaymentDueDate,
 
-                    epodUrl = string.IsNullOrWhiteSpace(o.epodRelPath) ? null : $"{baseUrl}/files/{o.epodRelPath}",
+                    // ✅ Nowe pole (preferowane przez frontend)
+                    downloadUrl = epodDownloadUrl,
+
+                    // ✅ Dla kompatybilności: epodUrl ustawiamy na to samo (SAS), zamiast /files/...
+                    epodUrl = epodDownloadUrl,
+
+                    // faktury nadal z /files/invoices/... (bo zapisujesz je na dysku App Service)
                     invoiceUrl = string.IsNullOrWhiteSpace(o.invoiceRelPath) ? null : $"{baseUrl}/files/{o.invoiceRelPath}",
 
                     lastProblemNote = p?.LastProblemNote,
@@ -246,7 +275,7 @@ namespace VilarDriverApi.Controllers
                     o.ContractorName,
                     o.PaymentDueDate,
 
-                    epodRelPath = o.EpodFile != null ? o.EpodFile.BlobName : null,
+                    epodBlobName = o.EpodFile != null ? o.EpodFile.BlobName : null,
                     invoiceRelPath = o.InvoicePdfRelativePath
                 })
                 .ToListAsync();
@@ -259,6 +288,8 @@ namespace VilarDriverApi.Controllers
             return Ok(orders.Select(o =>
             {
                 problemInfo.TryGetValue(o.Id, out var p);
+
+                var epodDownloadUrl = TryMakeEpodDownloadUrl(o.epodBlobName);
 
                 return new
                 {
@@ -287,7 +318,9 @@ namespace VilarDriverApi.Controllers
                     o.ContractorName,
                     o.PaymentDueDate,
 
-                    epodUrl = string.IsNullOrWhiteSpace(o.epodRelPath) ? null : $"{baseUrl}/files/{o.epodRelPath}",
+                    downloadUrl = epodDownloadUrl,
+                    epodUrl = epodDownloadUrl,
+
                     invoiceUrl = string.IsNullOrWhiteSpace(o.invoiceRelPath) ? null : $"{baseUrl}/files/{o.invoiceRelPath}",
 
                     lastProblemNote = p?.LastProblemNote,
@@ -296,6 +329,11 @@ namespace VilarDriverApi.Controllers
                 };
             }));
         }
+
+        // ===== reszta pliku bez zmian =====
+        // (Create / Edit / Delete / Assign / Status / Complete / Reopen / Invoice / Archive / Paid itd.)
+        // Zostawiasz dokładnie tak jak masz.
+        // ------------------------------------------------------------
 
         // ============================
         // CREATE ORDER (ADMIN)
@@ -384,7 +422,6 @@ namespace VilarDriverApi.Controllers
                 orderNumber = order.OrderNumber
             });
         }
-
         // ============================
         // ✅ EDIT BASIC FIELDS (ADMIN)
         // PUT /api/admin/orders/{id}/edit
