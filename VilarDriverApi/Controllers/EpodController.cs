@@ -80,12 +80,37 @@ namespace VilarDriverApi.Controllers
                     return Forbid("Driver cannot upload ePOD for someone else's order.");
             }
 
+            // ✅ docelowy blobName (zawsze w kontenerze epod)
             var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
+
+            // ✅ UPSERT metadanych do SQL:
+            // - jeśli już jest EpodFile dla zamówienia, podmieniamy BlobName na nowy
+            // - jeśli nie ma, tworzymy
+            var epod = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
+
+            if (epod == null)
+            {
+                epod = new EpodFile
+                {
+                    OrderId = orderId,
+                    BlobName = blobName,
+                    CreatedUtc = DateTime.UtcNow
+                };
+                _db.EpodFiles.Add(epod);
+            }
+            else
+            {
+                epod.BlobName = blobName;
+                epod.CreatedUtc = DateTime.UtcNow;
+                _db.EpodFiles.Update(epod);
+            }
+
+            await _db.SaveChangesAsync();
+
             var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
 
             return Ok(new UploadSasResponse(blobName, sasUri.ToString()));
         }
-
         public record AttachRequest(string BlobName, double? Lat, double? Lng);
 
         // Admin: create + overwrite
