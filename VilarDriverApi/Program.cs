@@ -204,15 +204,41 @@ else
             var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
             var ex = feature?.Error;
 
-            if (ex is SqlException sqlEx && sqlEx.Number == 40613)
-            {
-                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await context.Response.WriteAsync("Database is warming up. Try again in a moment.");
-                return;
-            }
+                context.Response.ContentType = "application/json; charset=utf-8";
 
-            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-            await context.Response.WriteAsync("Internal Server Error");
+    if (ex is SqlException sqlEx)
+    {
+        // SQL warming up / transient
+        if (sqlEx.Number == 40613)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                code = "DB_WARMING_UP",
+                message = "Baza danych się budzi. Spróbuj ponownie za chwilę."
+            });
+            return;
+        }
+
+        // ✅ Free tier limit / database paused (to co miałeś dziś)
+        if (sqlEx.Number == 42119)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                code = "DB_PAUSED",
+                message = "Baza danych jest wstrzymana (limit bezpłatnej oferty). Wznów w Azure Portal lub zmień plan."
+            });
+            return;
+        }
+    }
+
+    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+    await context.Response.WriteAsJsonAsync(new
+    {
+        code = "INTERNAL_ERROR",
+        message = "Internal Server Error"
+    });
         });
     });
 }

@@ -38,6 +38,11 @@ namespace VilarDriverApi.Services
             });
         }
 
+        public async Task PingAsync(CancellationToken ct = default)
+        {
+            await _container.GetPropertiesAsync(cancellationToken: ct);
+        }
+
         public async Task<bool> BlobExistsAsync(string blobName, CancellationToken ct = default)
         {
             blobName = NormalizeBlobName(blobName);
