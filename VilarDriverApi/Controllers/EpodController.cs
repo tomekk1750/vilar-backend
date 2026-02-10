@@ -83,9 +83,7 @@ namespace VilarDriverApi.Controllers
             // ✅ docelowy blobName (zawsze w kontenerze epod)
             var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
 
-            // ✅ UPSERT metadanych do SQL:
-            // - jeśli już jest EpodFile dla zamówienia, podmieniamy BlobName na nowy
-            // - jeśli nie ma, tworzymy
+            // ✅ UPSERT metadanych do SQL
             var epod = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
 
             if (epod == null)
@@ -108,9 +106,9 @@ namespace VilarDriverApi.Controllers
             await _db.SaveChangesAsync();
 
             var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
-
             return Ok(new UploadSasResponse(blobName, sasUri.ToString()));
         }
+
         public record AttachRequest(string BlobName, double? Lat, double? Lng);
 
         // Admin: create + overwrite
@@ -129,7 +127,7 @@ namespace VilarDriverApi.Controllers
             if (IsDriver && order.IsCompletedByAdmin)
                 return Forbid("Order is completed and locked by admin.");
 
-            // ✅ Guard: blob musi istnieć, żeby nie zapisać w DB śmieci
+            // ✅ Guard: blob musi istnieć
             if (!await _blob.BlobExistsAsync(req.BlobName))
                 return BadRequest("Blob does not exist.");
 
@@ -183,11 +181,16 @@ namespace VilarDriverApi.Controllers
         // Tylko admin pobiera
         [Authorize(Roles = "Admin,admin")]
         [HttpGet("{orderId:int}/download-sas")]
-        public async Task<ActionResult<DownloadSasResponse>> GetDownloadSas(int orderId)
+        public async Task<ActionResult<DownloadSasResponse>> GetDownloadSas(int orderId, CancellationToken ct)
         {
-            var epod = await _db.EpodFiles.AsNoTracking().FirstOrDefaultAsync(e => e.OrderId == orderId);
+            var epod = await _db.EpodFiles.AsNoTracking().FirstOrDefaultAsync(e => e.OrderId == orderId, ct);
             if (epod is null || string.IsNullOrWhiteSpace(epod.BlobName))
-                return NotFound("Epod file not found.");
+                return NotFound(new { code = "EPOD_NOT_FOUND" });
+
+            // ✅ KLUCZ: sprawdź czy blob faktycznie istnieje (legacy DB / usunięty plik)
+            var exists = await _blob.BlobExistsAsync(epod.BlobName, ct);
+            if (!exists)
+                return NotFound(new { code = "EPOD_NOT_FOUND" });
 
             var sasUri = _blob.CreateDownloadSas(epod.BlobName, TimeSpan.FromMinutes(5));
             return Ok(new DownloadSasResponse(sasUri.ToString()));

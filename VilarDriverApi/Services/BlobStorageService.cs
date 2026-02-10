@@ -38,11 +38,11 @@ namespace VilarDriverApi.Services
             });
         }
 
-        public async Task<bool> BlobExistsAsync(string blobName)
+        public async Task<bool> BlobExistsAsync(string blobName, CancellationToken ct = default)
         {
             blobName = NormalizeBlobName(blobName);
-        var blob = _container.GetBlobClient(blobName);
-            return await blob.ExistsAsync();
+            var blobClient = _container.GetBlobClient(blobName);
+            return await blobClient.ExistsAsync(ct);
         }
 
         public Uri CreateUploadSas(string blobName, string contentType, TimeSpan ttl)
@@ -92,7 +92,6 @@ namespace VilarDriverApi.Services
             return new UriBuilder(blobClient.Uri) { Query = sas }.Uri;
         }
 
-
         private string NormalizeBlobName(string blobName)
         {
             if (string.IsNullOrWhiteSpace(blobName))
@@ -100,7 +99,7 @@ namespace VilarDriverApi.Services
 
             var name = blobName.Trim().TrimStart('/');
 
-            // Jeśli ktoś przez pomyłkę zapisze "epod/..." a _containerName == "epod",
+            // Jeśli ktoś zapisze "epod/..." a _containerName == "epod",
             // to usuwamy ten prefix, bo kontener już to reprezentuje.
             var prefix = _containerName.Trim().Trim('/');
             if (!string.IsNullOrWhiteSpace(prefix))
@@ -109,9 +108,6 @@ namespace VilarDriverApi.Services
                 if (name.StartsWith(p, StringComparison.OrdinalIgnoreCase))
                     name = name.Substring(p.Length);
             }
-
-            // Ochrona przed przypadkiem "epod/epod_xxx" kiedy prefix już był dopisywany gdzie indziej
-            // (po usunięciu 1x powyżej zostanie "epod_xxx" i będzie OK).
 
             return name;
         }
