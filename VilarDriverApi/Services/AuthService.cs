@@ -80,7 +80,7 @@ namespace VilarDriverApi.Services
                 issuer: jwt["Issuer"],
                 audience: jwt["Audience"],
                 claims: claims,
-                expires: DateTime.UtcNow.AddDays(7),
+                expires: DateTime.UtcNow.AddDays(3),
                 signingCredentials: creds
             );
 
