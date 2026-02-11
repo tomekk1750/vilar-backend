@@ -8,6 +8,9 @@ using Microsoft.OpenApi.Models;
 using VilarDriverApi.Data;
 using VilarDriverApi.Services;
 using Microsoft.Data.SqlClient;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -105,6 +108,29 @@ builder.Services.AddCors(options =>
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<EpodService>();
 builder.Services.AddSingleton<BlobStorageService>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    // Jak przekroczą limit – 429
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Polityka do loginu (per IP)
+    options.AddPolicy("login", httpContext =>
+    {
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ip,
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,                  // np. 10 prób
+                Window = TimeSpan.FromMinutes(1),  // na 1 minutę
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0                      // nie kolejkujemy, od razu 429
+            });
+    });
+});
+
 
 // =====================
 // Controllers + Swagger
@@ -261,8 +287,66 @@ app.UseStaticFiles(new StaticFileOptions
 // =====================
 app.UseCors("Frontend");
 
+app.UseRateLimiter();
+
 app.UseAuthentication();
 app.UseAuthorization();
+
+    var startedUtc = DateTime.UtcNow;
+
+    app.MapGet("/version", () =>
+    {
+        var commit = Environment.GetEnvironmentVariable("GITHUB_SHA")
+                ?? Environment.GetEnvironmentVariable("WEBSITE_COMMIT_HASH")
+                ?? "unknown";
+
+        return Results.Ok(new
+        {
+            service = "VilarDriverApi",
+            env = app.Environment.EnvironmentName,
+            commit,
+            startedUtc
+        });
+    }).AllowAnonymous();
+
+    app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }))
+    .AllowAnonymous();
+
+    app.MapGet("/health/ready", async (AppDbContext db, BlobStorageService blob, CancellationToken ct) =>
+    {
+        // 1) DB ping (lekki)
+        try
+        {
+            var canConnect = await db.Database.CanConnectAsync(ct);
+            if (!canConnect)
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == 42119 || ex.Number == 40613)
+        {
+            // DB paused / warming up -> not ready
+            return Results.Problem(
+                title: "Database not ready",
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                detail: ex.Number == 42119 ? "DB_PAUSED" : "DB_WARMING_UP");
+        }
+
+        // 2) Storage ping (bez listowania plików)
+        // Najprościej: spróbuj utworzyć klienta kontenera i pobrać właściwości
+        try
+        {
+            // dodaj do BlobStorageService metodę PingAsync (poniżej)
+            await blob.PingAsync(ct);
+        }
+        catch
+        {
+            return Results.Problem(
+                title: "Storage not ready",
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                detail: "BLOB_NOT_READY");
+        }
+
+        return Results.Ok(new { status = "ready" });
+    }).AllowAnonymous();
 
 app.MapControllers();
 

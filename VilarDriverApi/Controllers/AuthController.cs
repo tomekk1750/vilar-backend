@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using VilarDriverApi.Services;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace VilarDriverApi.Controllers
 {
@@ -16,6 +17,7 @@ namespace VilarDriverApi.Controllers
 
         public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 
+        [EnableRateLimiting("login")]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest req)
         {
