@@ -196,6 +196,40 @@ namespace VilarDriverApi.Controllers
             return Ok(new DownloadSasResponse(sasUri.ToString()));
         }
 
+
+        public record ConfirmEpodResponse(bool Exists, string? BlobName);
+
+        [Authorize(Roles = "Admin,admin")]
+        [HttpPost("{orderId:int}/confirm")]
+        public async Task<ActionResult<ConfirmEpodResponse>> ConfirmEpod(int orderId)
+        {
+            var epod = await _db.EpodFiles.AsNoTracking()
+                .FirstOrDefaultAsync(e => e.OrderId == orderId);
+
+            if (epod is null || string.IsNullOrWhiteSpace(epod.BlobName))
+            {
+                return Conflict(new
+                {
+                    code = "EPOD_MISSING",
+                    message = "Brak ePOD w bazie dla tego zamówienia."
+                });
+            }
+
+            var exists = await _blob.BlobExistsAsync(epod.BlobName);
+
+            if (!exists)
+            {
+                return Conflict(new
+                {
+                    code = "EPOD_BLOB_NOT_FOUND",
+                    message = "ePOD w bazie wskazuje na plik, który nie istnieje w Blob Storage.",
+                    blobName = epod.BlobName
+                });
+            }
+
+            return Ok(new ConfirmEpodResponse(true, epod.BlobName));
+        }
+
         // Zdjęcia -> PDF -> Blob -> DB (tak jak attach), z tymi samymi zasadami security
         [Authorize(Roles = "Admin,Driver,admin,driver")]
         [HttpPost("{orderId:int}/from-photos")]
