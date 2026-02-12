@@ -10,6 +10,7 @@ namespace VilarDriverApi.Services
         private readonly string _connString;
         private readonly string _containerName;
         private readonly BlobContainerClient _container;
+        
 
         public BlobStorageService(IConfiguration config)
         {
@@ -97,12 +98,12 @@ namespace VilarDriverApi.Services
             return new UriBuilder(blobClient.Uri) { Query = sas }.Uri;
         }
 
-        private string NormalizeBlobName(string blobName)
+        public string NormalizeBlobName(string blobName)
         {
             if (string.IsNullOrWhiteSpace(blobName))
                 throw new ArgumentException("blobName is required", nameof(blobName));
 
-            var name = blobName.Trim().TrimStart('/');
+            var name = blobName.Trim().TrimStart('/').Replace("\\", "/");
 
             // Jeśli ktoś zapisze "epod/..." a _containerName == "epod",
             // to usuwamy ten prefix, bo kontener już to reprezentuje.

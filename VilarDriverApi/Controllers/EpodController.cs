@@ -57,7 +57,6 @@ namespace VilarDriverApi.Controllers
 
         public record UploadSasResponse(string BlobName, string UploadUrl);
 
-        // Admin + Driver: SAS do uploadu (driver tylko dla swoich zleceń)
         [Authorize(Roles = "Admin,Driver,admin,driver")]
         [HttpPost("{orderId:int}/upload-sas")]
         public async Task<ActionResult<UploadSasResponse>> GetUploadSas(int orderId)
@@ -80,10 +79,8 @@ namespace VilarDriverApi.Controllers
                     return Forbid("Driver cannot upload ePOD for someone else's order.");
             }
 
-            // ✅ docelowy blobName (zawsze w kontenerze epod)
             var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
 
-            // ✅ UPSERT metadanych do SQL
             var epod = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
 
             if (epod == null)
@@ -92,15 +89,23 @@ namespace VilarDriverApi.Controllers
                 {
                     OrderId = orderId,
                     BlobName = blobName,
-                    CreatedUtc = DateTime.UtcNow
+                    CreatedUtc = DateTime.UtcNow,
+
+                    Status = 0,          // Pending
+                    UploadedUtc = null,
+                    ConfirmedUtc = null
                 };
+
                 _db.EpodFiles.Add(epod);
             }
             else
             {
                 epod.BlobName = blobName;
                 epod.CreatedUtc = DateTime.UtcNow;
-                _db.EpodFiles.Update(epod);
+
+                epod.Status = 0;        // Pending
+                epod.UploadedUtc = null;
+                epod.ConfirmedUtc = null;
             }
 
             await _db.SaveChangesAsync();
@@ -108,7 +113,6 @@ namespace VilarDriverApi.Controllers
             var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
             return Ok(new UploadSasResponse(blobName, sasUri.ToString()));
         }
-
         public record AttachRequest(string BlobName, double? Lat, double? Lng);
 
         // Admin: create + overwrite
@@ -196,39 +200,54 @@ namespace VilarDriverApi.Controllers
             return Ok(new DownloadSasResponse(sasUri.ToString()));
         }
 
+        
+            public record ConfirmEpodResponse(bool Exists, string? BlobName, int Status, DateTime? UploadedUtc, DateTime? ConfirmedUtc);
 
-        public record ConfirmEpodResponse(bool Exists, string? BlobName);
-
-        [Authorize(Roles = "Admin,admin")]
-        [HttpPost("{orderId:int}/confirm")]
-        public async Task<ActionResult<ConfirmEpodResponse>> ConfirmEpod(int orderId)
-        {
-            var epod = await _db.EpodFiles.AsNoTracking()
-                .FirstOrDefaultAsync(e => e.OrderId == orderId);
-
-            if (epod is null || string.IsNullOrWhiteSpace(epod.BlobName))
+            [Authorize(Roles = "Admin,admin")]
+            [HttpPost("{orderId:int}/confirm")]
+            public async Task<ActionResult<ConfirmEpodResponse>> ConfirmEpod(int orderId)
             {
-                return Conflict(new
+                var epod = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
+
+                if (epod is null || string.IsNullOrWhiteSpace(epod.BlobName))
                 {
-                    code = "EPOD_MISSING",
-                    message = "Brak ePOD w bazie dla tego zamówienia."
-                });
-            }
+                    return Conflict(new
+                    {
+                        code = "EPOD_MISSING",
+                        message = "Brak ePOD w bazie dla tego zamówienia."
+                    });
+                }
 
-            var exists = await _blob.BlobExistsAsync(epod.BlobName);
+                var blobName = _blob.NormalizeBlobName(epod.BlobName);
 
-            if (!exists)
-            {
-                return Conflict(new
+                // idempotent
+                if (epod.Status == 1 && epod.ConfirmedUtc != null)
+                    return Ok(new ConfirmEpodResponse(true, blobName, epod.Status, epod.UploadedUtc, epod.ConfirmedUtc));
+
+                var exists = await _blob.BlobExistsAsync(blobName);
+
+                if (!exists)
                 {
-                    code = "EPOD_BLOB_NOT_FOUND",
-                    message = "ePOD w bazie wskazuje na plik, który nie istnieje w Blob Storage.",
-                    blobName = epod.BlobName
-                });
-            }
+                    epod.Status = 2; // Failed (opcjonalnie)
+                    await _db.SaveChangesAsync();
 
-            return Ok(new ConfirmEpodResponse(true, epod.BlobName));
-        }
+                    return Conflict(new
+                    {
+                        code = "EPOD_BLOB_NOT_FOUND",
+                        message = "Blob nie istnieje w storage.",
+                        blobName
+                    });
+                }
+
+                epod.BlobName = blobName;
+                epod.Status = 1;
+                epod.UploadedUtc = DateTime.UtcNow;     // ✅ KLUCZOWE
+                epod.ConfirmedUtc = DateTime.UtcNow;
+
+                await _db.SaveChangesAsync();
+
+                return Ok(new ConfirmEpodResponse(true, blobName, epod.Status, epod.UploadedUtc, epod.ConfirmedUtc));
+            }
 
         // Zdjęcia -> PDF -> Blob -> DB (tak jak attach), z tymi samymi zasadami security
         [Authorize(Roles = "Admin,Driver,admin,driver")]
