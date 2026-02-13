@@ -65,18 +65,31 @@ namespace VilarDriverApi.Controllers
             if (order is null)
                 return NotFound("Order not found.");
 
+            // FIX: nie używaj Forbid("...") - string jest traktowany jako scheme i kończy się 500
             if (IsDriver && order.IsCompletedByAdmin)
-                return Forbid("Order is completed and locked by admin.");
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    code = "ORDER_LOCKED",
+                    message = "Order is completed and locked by admin."
+                });
 
             if (IsDriver && !IsAdmin)
             {
                 var driverId = await GetDriverIdForCurrentUserAsync();
                 if (driverId is null)
-                    return Forbid("Driver profile not found.");
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        code = "DRIVER_PROFILE_NOT_FOUND",
+                        message = "Driver profile not found."
+                    });
 
                 var isMyOrder = await DriverOwnsOrderAsync(order);
                 if (!isMyOrder)
-                    return Forbid("Driver cannot upload ePOD for someone else's order.");
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        code = "NOT_YOUR_ORDER",
+                        message = "Driver cannot upload ePOD for someone else's order."
+                    });
             }
 
             var blobName = $"orders/{orderId}/epod_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
@@ -113,6 +126,7 @@ namespace VilarDriverApi.Controllers
             var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
             return Ok(new UploadSasResponse(blobName, sasUri.ToString()));
         }
+
         public record AttachRequest(string BlobName, double? Lat, double? Lng);
 
         // Admin: create + overwrite
@@ -128,8 +142,13 @@ namespace VilarDriverApi.Controllers
             if (order is null)
                 return NotFound("Order not found.");
 
+            // FIX: nie używaj Forbid("...") - string jest traktowany jako scheme i kończy się 500
             if (IsDriver && order.IsCompletedByAdmin)
-                return Forbid("Order is completed and locked by admin.");
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    code = "ORDER_LOCKED",
+                    message = "Order is completed and locked by admin."
+                });
 
             // ✅ Guard: blob musi istnieć
             if (!await _blob.BlobExistsAsync(req.BlobName))
@@ -141,14 +160,27 @@ namespace VilarDriverApi.Controllers
             {
                 var driverId = await GetDriverIdForCurrentUserAsync();
                 if (driverId is null)
-                    return Forbid("Driver profile not found.");
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        code = "DRIVER_PROFILE_NOT_FOUND",
+                        message = "Driver profile not found."
+                    });
 
                 var isMyOrder = await DriverOwnsOrderAsync(order);
                 if (!isMyOrder)
-                    return Forbid("Driver cannot add ePOD for someone else's order.");
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        code = "NOT_YOUR_ORDER",
+                        message = "Driver cannot add ePOD for someone else's order."
+                    });
 
+                // FIX: wcześniej było Forbid("Driver cannot edit...") -> 500
                 if (existing is not null)
-                    return Forbid("Driver cannot edit or overwrite existing ePOD.");
+                    return Conflict(new
+                    {
+                        code = "EPOD_ALREADY_EXISTS",
+                        message = "Driver cannot edit or overwrite existing ePOD."
+                    });
 
                 if (order.Status != OrderStatus.Delivered)
                     return StatusCode(StatusCodes.Status409Conflict,
@@ -200,54 +232,53 @@ namespace VilarDriverApi.Controllers
             return Ok(new DownloadSasResponse(sasUri.ToString()));
         }
 
-        
-            public record ConfirmEpodResponse(bool Exists, string? BlobName, int Status, DateTime? UploadedUtc, DateTime? ConfirmedUtc);
+        public record ConfirmEpodResponse(bool Exists, string? BlobName, int Status, DateTime? UploadedUtc, DateTime? ConfirmedUtc);
 
-            [Authorize(Roles = "Admin,admin")]
-            [HttpPost("{orderId:int}/confirm")]
-            public async Task<ActionResult<ConfirmEpodResponse>> ConfirmEpod(int orderId)
+        [Authorize(Roles = "Admin,admin")]
+        [HttpPost("{orderId:int}/confirm")]
+        public async Task<ActionResult<ConfirmEpodResponse>> ConfirmEpod(int orderId)
+        {
+            var epod = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
+
+            if (epod is null || string.IsNullOrWhiteSpace(epod.BlobName))
             {
-                var epod = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
-
-                if (epod is null || string.IsNullOrWhiteSpace(epod.BlobName))
+                return Conflict(new
                 {
-                    return Conflict(new
-                    {
-                        code = "EPOD_MISSING",
-                        message = "Brak ePOD w bazie dla tego zamówienia."
-                    });
-                }
+                    code = "EPOD_MISSING",
+                    message = "Brak ePOD w bazie dla tego zamówienia."
+                });
+            }
 
-                var blobName = _blob.NormalizeBlobName(epod.BlobName);
+            var blobName = _blob.NormalizeBlobName(epod.BlobName);
 
-                // idempotent
-                if (epod.Status == 1 && epod.ConfirmedUtc != null)
-                    return Ok(new ConfirmEpodResponse(true, blobName, epod.Status, epod.UploadedUtc, epod.ConfirmedUtc));
+            // idempotent
+            if (epod.Status == 1 && epod.ConfirmedUtc != null)
+                return Ok(new ConfirmEpodResponse(true, blobName, epod.Status, epod.UploadedUtc, epod.ConfirmedUtc));
 
-                var exists = await _blob.BlobExistsAsync(blobName);
+            var exists = await _blob.BlobExistsAsync(blobName);
 
-                if (!exists)
-                {
-                    epod.Status = 2; // Failed (opcjonalnie)
-                    await _db.SaveChangesAsync();
-
-                    return Conflict(new
-                    {
-                        code = "EPOD_BLOB_NOT_FOUND",
-                        message = "Blob nie istnieje w storage.",
-                        blobName
-                    });
-                }
-
-                epod.BlobName = blobName;
-                epod.Status = 1;
-                epod.UploadedUtc = DateTime.UtcNow;     // ✅ KLUCZOWE
-                epod.ConfirmedUtc = DateTime.UtcNow;
-
+            if (!exists)
+            {
+                epod.Status = 2; // Failed (opcjonalnie)
                 await _db.SaveChangesAsync();
 
-                return Ok(new ConfirmEpodResponse(true, blobName, epod.Status, epod.UploadedUtc, epod.ConfirmedUtc));
+                return Conflict(new
+                {
+                    code = "EPOD_BLOB_NOT_FOUND",
+                    message = "Blob nie istnieje w storage.",
+                    blobName
+                });
             }
+
+            epod.BlobName = blobName;
+            epod.Status = 1;
+            epod.UploadedUtc = DateTime.UtcNow;     // ✅ KLUCZOWE
+            epod.ConfirmedUtc = DateTime.UtcNow;
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new ConfirmEpodResponse(true, blobName, epod.Status, epod.UploadedUtc, epod.ConfirmedUtc));
+        }
 
         // Zdjęcia -> PDF -> Blob -> DB (tak jak attach), z tymi samymi zasadami security
         [Authorize(Roles = "Admin,Driver,admin,driver")]
@@ -263,8 +294,13 @@ namespace VilarDriverApi.Controllers
             if (order is null)
                 return NotFound("Order not found.");
 
+            // FIX: nie używaj Forbid("...") - string jest traktowany jako scheme i kończy się 500
             if (IsDriver && order.IsCompletedByAdmin)
-                return Forbid("Order is completed and locked by admin.");
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    code = "ORDER_LOCKED",
+                    message = "Order is completed and locked by admin."
+                });
 
             var existing = await _db.EpodFiles.FirstOrDefaultAsync(e => e.OrderId == orderId);
 
@@ -272,14 +308,27 @@ namespace VilarDriverApi.Controllers
             {
                 var driverId = await GetDriverIdForCurrentUserAsync();
                 if (driverId is null)
-                    return Forbid("Driver profile not found.");
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        code = "DRIVER_PROFILE_NOT_FOUND",
+                        message = "Driver profile not found."
+                    });
 
                 var isMyOrder = await DriverOwnsOrderAsync(order);
                 if (!isMyOrder)
-                    return Forbid("Driver cannot add ePOD for someone else's order.");
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        code = "NOT_YOUR_ORDER",
+                        message = "Driver cannot add ePOD for someone else's order."
+                    });
 
+                // FIX: wcześniej było Forbid("Driver cannot edit...") -> 500
                 if (existing is not null)
-                    return Forbid("Driver cannot edit or overwrite existing ePOD.");
+                    return Conflict(new
+                    {
+                        code = "EPOD_ALREADY_EXISTS",
+                        message = "Driver cannot edit or overwrite existing ePOD."
+                    });
 
                 if (order.Status != OrderStatus.Delivered)
                     return StatusCode(StatusCodes.Status409Conflict,
