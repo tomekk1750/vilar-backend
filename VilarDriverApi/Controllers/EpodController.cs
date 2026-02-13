@@ -118,7 +118,8 @@ namespace VilarDriverApi.Controllers
 
                 epod.Status = 0;        // Pending
                 epod.UploadedUtc = null;
-                epod.ConfirmedUtc = null;
+                epod.ConfirmedUtc = null
+;
             }
 
             await _db.SaveChangesAsync();
@@ -174,13 +175,24 @@ namespace VilarDriverApi.Controllers
                         message = "Driver cannot add ePOD for someone else's order."
                     });
 
-                // FIX: wcześniej było Forbid("Driver cannot edit...") -> 500
-                if (existing is not null)
+                // ✅ Driver: blokuj tylko FINALNY ePOD (Pending jest OK, bo upload-sas tworzy rekord wcześniej)
+                if (existing is not null && (existing.ConfirmedUtc != null || existing.Status != 0))
                     return Conflict(new
                     {
                         code = "EPOD_ALREADY_EXISTS",
                         message = "Driver cannot edit or overwrite existing ePOD."
                     });
+
+                // ✅ Jeśli rekord Pending istnieje, Driver może tylko “dopiąć” ten sam blobName
+                if (existing is not null && existing.Status == 0 &&
+                    !string.Equals(existing.BlobName, req.BlobName, StringComparison.Ordinal))
+                {
+                    return BadRequest(new
+                    {
+                        code = "EPOD_BLOBNAME_MISMATCH",
+                        message = "BlobName mismatch."
+                    });
+                }
 
                 if (order.Status != OrderStatus.Delivered)
                     return StatusCode(StatusCodes.Status409Conflict,
@@ -201,12 +213,16 @@ namespace VilarDriverApi.Controllers
             }
             else
             {
-                // Admin overwrite
+                // Admin overwrite OR driver finalizing pending record
                 existing.BlobName = req.BlobName;
                 existing.Lat = req.Lat;
                 existing.Lng = req.Lng;
                 existing.CreatedUtc = DateTime.UtcNow;
             }
+
+            // ✅ zaznacz, że attach po uploadzie doszedł
+            existing.UploadedUtc = DateTime.UtcNow;
+            existing.Status = 0; // nadal Pending do czasu Confirm
 
             await _db.SaveChangesAsync();
             return Ok();
@@ -322,8 +338,8 @@ namespace VilarDriverApi.Controllers
                         message = "Driver cannot add ePOD for someone else's order."
                     });
 
-                // FIX: wcześniej było Forbid("Driver cannot edit...") -> 500
-                if (existing is not null)
+                // ✅ Driver: blokuj tylko FINALNY ePOD (Pending jest OK)
+                if (existing is not null && (existing.ConfirmedUtc != null || existing.Status != 0))
                     return Conflict(new
                     {
                         code = "EPOD_ALREADY_EXISTS",
@@ -361,17 +377,21 @@ namespace VilarDriverApi.Controllers
                     BlobName = blobName,
                     CreatedUtc = DateTime.UtcNow,
                     Lat = lat,
-                    Lng = lng
+                    Lng = lng,
+                    Status = 0,
+                    UploadedUtc = DateTime.UtcNow
                 };
                 _db.EpodFiles.Add(existing);
             }
             else
             {
-                // Admin overwrite
+                // Admin overwrite OR driver overwriting pending draft
                 existing.BlobName = blobName;
                 existing.CreatedUtc = DateTime.UtcNow;
                 existing.Lat = lat;
                 existing.Lng = lng;
+                existing.Status = 0;
+                existing.UploadedUtc = DateTime.UtcNow;
             }
 
             await _db.SaveChangesAsync();
