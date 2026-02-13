@@ -124,7 +124,7 @@ namespace VilarDriverApi.Controllers
 
             await _db.SaveChangesAsync();
 
-            var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(10));
+            var sasUri = _blob.CreateUploadSas(blobName, "application/pdf", TimeSpan.FromMinutes(30));
             return Ok(new UploadSasResponse(blobName, sasUri.ToString()));
         }
 

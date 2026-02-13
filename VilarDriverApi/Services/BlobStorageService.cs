@@ -64,12 +64,11 @@ namespace VilarDriverApi.Services
                 BlobContainerName = _containerName,
                 BlobName = blobName,
                 Resource = "b",
-                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-2),
-                ExpiresOn = DateTimeOffset.UtcNow.Add(ttl),
-                ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/pdf" : contentType
+                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-5),
+                ExpiresOn = DateTimeOffset.UtcNow.Add(ttl)
             };
 
-            sasBuilder.SetPermissions(BlobSasPermissions.Create | BlobSasPermissions.Write);
+sasBuilder.SetPermissions(BlobSasPermissions.Create | BlobSasPermissions.Write);
 
             var sas = sasBuilder.ToSasQueryParameters(credential).ToString();
             return new UriBuilder(blobClient.Uri) { Query = sas }.Uri;
@@ -88,8 +87,10 @@ namespace VilarDriverApi.Services
                 BlobContainerName = _containerName,
                 BlobName = blobName,
                 Resource = "b",
-                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-2),
-                ExpiresOn = DateTimeOffset.UtcNow.Add(ttl)
+                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-5),
+                ExpiresOn = DateTimeOffset.UtcNow.Add(ttl),
+                ContentType = "application/pdf",
+                ContentDisposition = "inline; filename=epod.pdf"
             };
 
             sasBuilder.SetPermissions(BlobSasPermissions.Read);
